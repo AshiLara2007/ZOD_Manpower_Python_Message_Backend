@@ -132,41 +132,50 @@ async def send_cvs(request: CVRequest):
 
         file_url = f"{PUBLIC_URL}/serve-pdf"
 
-        # 🔥 Template Message එක හදන්න (PDF caption එකට)
-        first_cv = selected_cvs[0]
-        name = first_cv.get("name") or first_cv.get("candidate_name") or "Lara Williams"
-        job = first_cv.get("job") or first_cv.get("job_role") or "Developer"
-        
-        # 🔥 මෙය PDF එකත් එක්ක එන Caption එකයි
-        caption_text = f"""Hey, Thanks for Selected ZOD Manpower Recruitment,
-This is your selected CVs
-
-{name} ({job})"""
+        # 🔥 Template Message එක - Text පමණක්, CV නම් නැතුව
+        caption_text = """Hey, Thanks for Selected ZOD Manpower Recruitment,
+This is your selected CVs"""
 
         print(f"Caption: {caption_text}")
         print(f"File URL: {file_url}")
         print("Sending PDF with caption to OpenWA...")
 
-        # 🔥 එකම Message එකක්: PDF + Caption (Text)
+        # 🔥 පළමුව Text Message එක යවන්න (Caption එකක් නැතුව PDF එක වෙනම)
         async with httpx.AsyncClient(timeout=300.0) as client:
-            payload = {
+            # 1. Text Message එක යවන්න
+            text_payload = {
                 "chatId": f"{request.phoneNumber}@c.us",
-                "url": file_url,
-                "filename": "Selected CVs.pdf",
-                "caption": caption_text  # 🔥 මෙය Text Message එක PDF එකත් එක්ක යයි
+                "text": caption_text
             }
-
-            response = await client.post(
-                f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-document",
-                json=payload,
+            
+            text_response = await client.post(
+                f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-text",
+                json=text_payload,
                 headers={
                     "Content-Type": "application/json",
                     "X-API-Key": API_KEY
                 }
             )
-            response.raise_for_status()
+            print(f"Text Response Status: {text_response.status_code}")
 
-        print(f"OpenWA Response Status: {response.status_code}")
+            # 2. PDF Document එක වෙනම යවන්න (Caption නැතුව)
+            doc_payload = {
+                "chatId": f"{request.phoneNumber}@c.us",
+                "url": file_url,
+                "filename": "Selected CVs.pdf"
+            }
+
+            doc_response = await client.post(
+                f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-document",
+                json=doc_payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-API-Key": API_KEY
+                }
+            )
+            doc_response.raise_for_status()
+
+        print(f"Document Response Status: {doc_response.status_code}")
 
         os.unlink(temp_path)
 
