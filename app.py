@@ -21,7 +21,7 @@ app.add_middleware(
 OPENWA_URL = os.getenv("OPENWA_URL", "http://localhost:2785")
 SESSION_ID = os.getenv("SESSION_ID", "319f57c3-fb2f-48ee-bb92-bcdfef491fe8")
 API_KEY = os.getenv("API_KEY", "owa_k1_f272efc10df6fc3e786a149044169a0809631b9f06342b10e8adcce902b1c109")
-PUBLIC_URL = os.getenv("PUBLIC_URL", "https://zod-cv-backend-python.fastapicloud.dev")
+PUBLIC_URL = os.getenv("PUBLIC_URL", "https://zod-cv-backend-python.onrender.com")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ksyxmoqzcghszrhlpaxh.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_U289_qf4pkGHp-G1C4kX5w_2bztcmOg")
 
