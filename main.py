@@ -1,6 +1,5 @@
 import os
 import tempfile
-import io
 from typing import List
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -75,11 +74,9 @@ def generate_pdf_fpdf2(cv_list: List[dict]) -> bytes:
             img_data = download_image(image_url)
             if img_data:
                 try:
-                    # Save image to temp file
                     temp_image_path = tempfile.mktemp(suffix=".jpg")
                     with open(temp_image_path, "wb") as f:
                         f.write(img_data)
-                    # Insert image (fpdf2 can handle JPEG without Pillow)
                     pdf.image(temp_image_path, x=10, y=20, w=190)
                     os.unlink(temp_image_path)
                 except Exception as e:
@@ -93,7 +90,6 @@ def generate_pdf_fpdf2(cv_list: List[dict]) -> bytes:
             pdf.set_font("Helvetica", size=12)
             pdf.cell(190, 10, "No CV Image URL found", ln=True, align='C')
 
-        # Footer
         pdf.set_y(270)
         pdf.set_font("Helvetica", "B", size=14)
         pdf.cell(190, 10, name, ln=True, align='C')
