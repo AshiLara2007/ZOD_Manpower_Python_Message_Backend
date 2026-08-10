@@ -18,7 +18,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-OPENWA_URL = os.getenv("OPENWA_URL", "http://localhost:2785")
+OPENWA_URL = os.getenv("OPENWA_URL", "https://694f-2a04-7f80-30f4-4f00-316a-4e3a-37f/")
 SESSION_ID = os.getenv("SESSION_ID", "319f57c3-fb2f-48ee-bb92-bcdfef491fe8")
 API_KEY = os.getenv("API_KEY", "owa_k1_f272efc10df6fc3e786a149044169a0809631b9f06342b10e8adcce902b1c109")
 PUBLIC_URL = os.getenv("PUBLIC_URL", "https://zod-cv-backend-python.onrender.com")
