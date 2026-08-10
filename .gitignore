@@ -3,3 +3,4 @@
 "*.pyc" 
 "temp_*.pdf" 
 ".env" 
+"__pycache__/" 
