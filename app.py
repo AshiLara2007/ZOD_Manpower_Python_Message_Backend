@@ -1,5 +1,6 @@
 import os
 import tempfile
+import asyncio
 from typing import List
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +8,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import httpx
 from fpdf import FPDF
+from PIL import Image
 
 app = FastAPI()
 
@@ -59,47 +61,65 @@ async def download_image(url: str) -> bytes:
         print(f"Failed to download image: {url}, error: {e}")
         return None
 
+def get_image_size(img_data: bytes):
+    """රූපයේ width සහ height ලබා ගනී"""
+    try:
+        img = Image.open(io.BytesIO(img_data))
+        return img.size
+    except:
+        return None, None
+
 async def generate_pdf(cv_list: List[dict]) -> bytes:
+    # 🔥 සියලුම images එකවර download කරන්න (වේගවත්)
+    download_tasks = []
+    for cv in cv_list:
+        image_url = cv.get("cv") or cv.get("cv_url") or cv.get("cvUrl") or ""
+        download_tasks.append(download_image(image_url))
+    
+    # Parallel download
+    image_data_list = await asyncio.gather(*download_tasks)
+    
     pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_auto_page_break(auto=False)  # auto page break OFF කරන්න
 
     for idx, cv in enumerate(cv_list):
         name = cv.get("name") or cv.get("candidate_name") or "Unnamed Candidate"
         job = cv.get("job") or cv.get("job_role") or "N/A"
-        image_url = cv.get("cv") or cv.get("cv_url") or cv.get("cvUrl") or ""
+        img_data = image_data_list[idx]
 
-        
+        # 🔥 එක් CV එකක් එක් පිටුවක්
         pdf.add_page()
 
-        if image_url:
-            img_data = await download_image(image_url)
-            if img_data:
-                try:
-                    temp_path = tempfile.mktemp(suffix=".jpg")
-                    with open(temp_path, "wb") as f:
-                        f.write(img_data)
-                    
-                    pdf.image(temp_path, x=10, y=20, w=190)
-                    os.unlink(temp_path)
-                except Exception as e:
-                    print(f"Error processing image: {e}")
-                    pdf.set_font("Helvetica", size=12)
-                    pdf.cell(190, 10, "CV Image unavailable", ln=True, align='C')
-            else:
+        if img_data:
+            try:
+                temp_path = tempfile.mktemp(suffix=".jpg")
+                with open(temp_path, "wb") as f:
+                    f.write(img_data)
+                
+                # රූපය පිටුවට ගැලපෙන ලෙස
+                # A4 width = 210mm, height = 297mm
+                margin = 10
+                page_width = 210 - (2 * margin)
+                page_height = 297 - (2 * margin) - 20  # පතුලේ නම සඳහා ඉඩ
+                
+                pdf.image(temp_path, x=margin, y=margin, w=page_width, h=page_height)
+                os.unlink(temp_path)
+            except Exception as e:
+                print(f"Error processing image: {e}")
                 pdf.set_font("Helvetica", size=12)
                 pdf.cell(190, 10, "CV Image unavailable", ln=True, align='C')
         else:
             pdf.set_font("Helvetica", size=12)
-            pdf.cell(190, 10, "No CV Image URL found", ln=True, align='C')
+            pdf.cell(190, 10, "No CV Image found", ln=True, align='C')
 
         # පිටුවේ පතුලේ CV නම සහ රැකියාව
-        pdf.set_y(270)
-        pdf.set_font("Helvetica", "B", size=14)
-        pdf.cell(190, 10, name, ln=True, align='C')
-        pdf.set_font("Helvetica", size=12)
-        pdf.cell(190, 8, job, ln=True, align='C')
+        pdf.set_y(280)
+        pdf.set_font("Helvetica", "B", size=12)
+        pdf.cell(190, 8, name, ln=True, align='C')
+        pdf.set_font("Helvetica", size=10)
+        pdf.cell(190, 6, job, ln=True, align='C')
         pdf.set_font("Helvetica", size=8)
-        pdf.cell(190, 6, f"Page {idx + 1} of {len(cv_list)}", ln=True, align='C')
+        pdf.cell(190, 5, f"Page {idx + 1} of {len(cv_list)}", ln=True, align='C')
 
     return bytes(pdf.output(dest='S'))
 
