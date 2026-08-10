@@ -21,7 +21,7 @@ app.add_middleware(
 OPENWA_URL = os.getenv("OPENWA_URL", "http://localhost:2785")
 SESSION_ID = os.getenv("SESSION_ID", "319f57c3-fb2f-48ee-bb92-bcdfef491fe8")
 API_KEY = os.getenv("API_KEY", "owa_k1_f272efc10df6fc3e786a149044169a0809631b9f06342b10e8adcce902b1c109")
-PUBLIC_URL = os.getenv("PUBLIC_URL", "https://zod-cv-backend-python.fastapicloud.dev")
+PUBLIC_URL = os.getenv("PUBLIC_URL", "https://zod-cv-backend.onrender.com")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ksyxmoqzcghszrhlpaxh.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_U289_qf4pkGHp-G1C4kX5w_2bztcmOg")
 
@@ -71,7 +71,6 @@ async def generate_pdf(cv_list: List[dict]) -> bytes:
         pdf.add_page()
 
         if image_url:
-            # 🔥 await එකතු කර ඇත
             img_data = await download_image(image_url)
             if img_data:
                 try:
@@ -99,7 +98,8 @@ async def generate_pdf(cv_list: List[dict]) -> bytes:
         pdf.set_font("Helvetica", size=8)
         pdf.cell(190, 6, f"Page {idx + 1} of {len(cv_list)}", ln=True, align='C')
 
-    return pdf.output(dest='S').encode('latin1')
+    # 🔥 මෙය නිවැරදි කර ඇත
+    return bytes(pdf.output(dest='S'))
 
 @app.post("/send-cvs", response_model=CVResponse)
 async def send_cvs(request: CVRequest):
