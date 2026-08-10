@@ -18,10 +18,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-OPENWA_URL = os.getenv("OPENWA_URL", "https://694f-2a04-7f80-30f4-4f00-316a-4e3a-37f/")
-SESSION_ID = os.getenv("SESSION_ID", "b7ec0158-6487-4f20-8192-c6a9d0beb0f2")
-API_KEY = os.getenv("API_KEY", "owa_k1_5e62a9507e4ff705c5006977518c2c17542310768bd1c0b388902fc50e238e34")
-PUBLIC_URL = os.getenv("PUBLIC_URL", "https://zod-cv-backend-python.onrender.com")
+OPENWA_URL = os.getenv("OPENWA_URL", "http://localhost:2785")
+SESSION_ID = os.getenv("SESSION_ID", "319f57c3-fb2f-48ee-bb92-bcdfef491fe8")
+API_KEY = os.getenv("API_KEY", "owa_k1_f272efc10df6fc3e786a149044169a0809631b9f06342b10e8adcce902b1c109")
+PUBLIC_URL = os.getenv("PUBLIC_URL", "https://zod-cv-backend-python.fastapicloud.dev")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ksyxmoqzcghszrhlpaxh.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_U289_qf4pkGHp-G1C4kX5w_2bztcmOg")
 
@@ -59,7 +59,7 @@ async def download_image(url: str) -> bytes:
         print(f"Failed to download image: {url}, error: {e}")
         return None
 
-def generate_pdf(cv_list: List[dict]) -> bytes:
+async def generate_pdf(cv_list: List[dict]) -> bytes:
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
 
@@ -71,7 +71,8 @@ def generate_pdf(cv_list: List[dict]) -> bytes:
         pdf.add_page()
 
         if image_url:
-            img_data = download_image(image_url)
+            # 🔥 await එකතු කර ඇත
+            img_data = await download_image(image_url)
             if img_data:
                 try:
                     temp_path = tempfile.mktemp(suffix=".jpg")
@@ -116,7 +117,7 @@ async def send_cvs(request: CVRequest):
 
         print(f"Generating PDF with {len(selected_cvs)} CV images...")
 
-        pdf_bytes = generate_pdf(selected_cvs)
+        pdf_bytes = await generate_pdf(selected_cvs)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
             tmp_file.write(pdf_bytes)
