@@ -16,3 +16,6 @@ dependencies = [
     "pydantic==2.10.4",
     "python-dotenv==1.0.1"
 ]
+
+[tool.uv]
+dev-dependencies = []

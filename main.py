@@ -59,7 +59,7 @@ async def download_image(url: str) -> bytes:
         print(f"Failed to download image: {url}, error: {e}")
         return None
 
-def generate_pdf_fpdf2(cv_list: List[dict]) -> bytes:
+def generate_pdf(cv_list: List[dict]) -> bytes:
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
 
@@ -74,13 +74,13 @@ def generate_pdf_fpdf2(cv_list: List[dict]) -> bytes:
             img_data = download_image(image_url)
             if img_data:
                 try:
-                    temp_image_path = tempfile.mktemp(suffix=".jpg")
-                    with open(temp_image_path, "wb") as f:
+                    temp_path = tempfile.mktemp(suffix=".jpg")
+                    with open(temp_path, "wb") as f:
                         f.write(img_data)
-                    pdf.image(temp_image_path, x=10, y=20, w=190)
-                    os.unlink(temp_image_path)
+                    pdf.image(temp_path, x=10, y=20, w=190)
+                    os.unlink(temp_path)
                 except Exception as e:
-                    print(f"Error processing image {image_url}: {e}")
+                    print(f"Error processing image: {e}")
                     pdf.set_font("Helvetica", size=12)
                     pdf.cell(190, 10, "CV Image unavailable", ln=True, align='C')
             else:
@@ -116,7 +116,7 @@ async def send_cvs(request: CVRequest):
 
         print(f"Generating PDF with {len(selected_cvs)} CV images...")
 
-        pdf_bytes = generate_pdf_fpdf2(selected_cvs)
+        pdf_bytes = generate_pdf(selected_cvs)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
             tmp_file.write(pdf_bytes)
@@ -181,4 +181,4 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=5000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
