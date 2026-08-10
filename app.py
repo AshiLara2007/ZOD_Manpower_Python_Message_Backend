@@ -132,50 +132,34 @@ async def send_cvs(request: CVRequest):
 
         file_url = f"{PUBLIC_URL}/serve-pdf"
 
-        # 🔥 Template Message එක - Text පමණක්, CV නම් නැතුව
+        # 🔥 Message Text එක - PDF එකත් එක්ක එකම Message එකේ
         caption_text = """Hey, Thanks for Selected ZOD Manpower Recruitment,
 This is your selected CVs"""
 
         print(f"Caption: {caption_text}")
         print(f"File URL: {file_url}")
-        print("Sending PDF with caption to OpenWA...")
+        print("Sending PDF with caption in ONE message...")
 
-        # 🔥 පළමුව Text Message එක යවන්න (Caption එකක් නැතුව PDF එක වෙනම)
+        # 🔥 එකම Message එක: PDF + Caption (Text) - ONE MESSAGE
         async with httpx.AsyncClient(timeout=300.0) as client:
-            # 1. Text Message එක යවන්න
-            text_payload = {
-                "chatId": f"{request.phoneNumber}@c.us",
-                "text": caption_text
-            }
-            
-            text_response = await client.post(
-                f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-text",
-                json=text_payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-API-Key": API_KEY
-                }
-            )
-            print(f"Text Response Status: {text_response.status_code}")
-
-            # 2. PDF Document එක වෙනම යවන්න (Caption නැතුව)
-            doc_payload = {
+            payload = {
                 "chatId": f"{request.phoneNumber}@c.us",
                 "url": file_url,
-                "filename": "Selected CVs.pdf"
+                "filename": "Selected CVs.pdf",
+                "caption": caption_text
             }
 
-            doc_response = await client.post(
+            response = await client.post(
                 f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-document",
-                json=doc_payload,
+                json=payload,
                 headers={
                     "Content-Type": "application/json",
                     "X-API-Key": API_KEY
                 }
             )
-            doc_response.raise_for_status()
+            response.raise_for_status()
 
-        print(f"Document Response Status: {doc_response.status_code}")
+        print(f"OpenWA Response Status: {response.status_code}")
 
         os.unlink(temp_path)
 
