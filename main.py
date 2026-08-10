@@ -1,12 +1,17 @@
 import os
 import tempfile
+import io
 from typing import List
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import httpx
-from weasyprint import HTML
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.utils import ImageReader
+from reportlab.lib.units import mm
+from PIL import Image
 
 app = FastAPI()
 
@@ -48,55 +53,79 @@ async def fetch_cvs_from_supabase(cv_ids: List[int]) -> List[dict]:
         response.raise_for_status()
         return response.json()
 
-def generate_pdf_from_html(html_content: str) -> bytes:
-    """Generate PDF from HTML using WeasyPrint (no browser needed)"""
+async def download_image(url: str) -> bytes:
+    if not url:
+        return None
     try:
-        pdf_bytes = HTML(string=html_content).write_pdf()
-        return pdf_bytes
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            return response.content
     except Exception as e:
-        print(f"PDF generation error: {str(e)}")
-        raise
+        print(f"Failed to download image: {url}, error: {e}")
+        return None
 
-def build_html(cv_list: List[dict]) -> str:
-    pages_html = ""
+def generate_pdf_reportlab(cv_list: List[dict]) -> bytes:
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
 
     for idx, cv in enumerate(cv_list):
-        image_url = cv.get("cv") or cv.get("cv_url") or cv.get("cvUrl") or ""
         name = cv.get("name") or cv.get("candidate_name") or "Unnamed Candidate"
         job = cv.get("job") or cv.get("job_role") or "N/A"
+        image_url = cv.get("cv") or cv.get("cv_url") or cv.get("cvUrl") or ""
 
-        img_tag = f'<img src="{image_url}" style="max-width:100%; max-height:80vh; object-fit:contain;" />' if image_url else '<div style="color:#999; font-size:20px; padding:40px;">No CV Image</div>'
+        if idx > 0:
+            pdf.showPage()
+            pdf.setPageSize(A4)
 
-        pages_html += f"""
-        <div style="page-break-after:always; width:100%; min-height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:white; padding:20px;">
-            <div style="flex:1; display:flex; justify-content:center; align-items:center; width:100%;">
-                {img_tag}
-            </div>
-            <div style="text-align:center; font-family:Arial; margin-top:10px; padding:10px; border-top:1px solid #eee; width:100%;">
-                <div style="font-weight:bold; font-size:16px;">{name}</div>
-                <div style="color:#666; font-size:14px;">{job}</div>
-                <div style="color:#999; font-size:12px; margin-top:4px;">Page {idx + 1} of {len(cv_list)}</div>
-            </div>
-        </div>
-        """
+        if image_url:
+            img_data = download_image(image_url)
+            if img_data:
+                try:
+                    img = Image.open(io.BytesIO(img_data))
+                    img_width, img_height = img.size
+                    aspect = img_width / img_height
 
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <title>Selected CVs</title>
-        <style>
-            * {{ margin:0; padding:0; box-sizing:border-box; }}
-            body {{ background:white; }}
-            img {{ display:block; max-width:100%; max-height:80vh; object-fit:contain; margin:0 auto; }}
-        </style>
-    </head>
-    <body>
-        {pages_html}
-    </body>
-    </html>
-    """
+                    margin = 20 * mm
+                    max_width = width - (2 * margin)
+                    max_height = height - (2 * margin) - 40 * mm
+
+                    if aspect > (max_width / max_height):
+                        final_width = max_width
+                        final_height = max_width / aspect
+                    else:
+                        final_height = max_height
+                        final_width = max_height * aspect
+
+                    x_offset = (width - final_width) / 2
+                    y_offset = (height - final_height) / 2
+
+                    temp_image_path = tempfile.mktemp(suffix=".jpg")
+                    img.convert("RGB").save(temp_image_path, "JPEG")
+
+                    pdf.drawImage(temp_image_path, x_offset, y_offset, width=final_width, height=final_height, preserveAspectRatio=True, anchor='c')
+                    os.unlink(temp_image_path)
+
+                except Exception as e:
+                    print(f"Error processing image {image_url}: {e}")
+                    pdf.drawString(50, height/2, "CV Image unavailable")
+            else:
+                pdf.drawString(50, height/2, "CV Image unavailable")
+        else:
+            pdf.drawString(50, height/2, "No CV Image URL found")
+
+        pdf.setFont("Helvetica", 12)
+        pdf.drawCentredString(width / 2, 25 * mm, name)
+        pdf.setFont("Helvetica", 10)
+        pdf.drawCentredString(width / 2, 20 * mm, job)
+
+        pdf.setFont("Helvetica", 8)
+        pdf.drawCentredString(width / 2, 10 * mm, f"Page {idx + 1} of {len(cv_list)}")
+
+    pdf.save()
+    buffer.seek(0)
+    return buffer.read()
 
 @app.post("/send-cvs", response_model=CVResponse)
 async def send_cvs(request: CVRequest):
@@ -114,8 +143,7 @@ async def send_cvs(request: CVRequest):
 
         print(f"Generating PDF with {len(selected_cvs)} CV images...")
 
-        html_content = build_html(selected_cvs)
-        pdf_bytes = generate_pdf_from_html(html_content)
+        pdf_bytes = generate_pdf_reportlab(selected_cvs)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
             tmp_file.write(pdf_bytes)
