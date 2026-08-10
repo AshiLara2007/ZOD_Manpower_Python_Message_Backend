@@ -68,6 +68,7 @@ async def generate_pdf(cv_list: List[dict]) -> bytes:
         job = cv.get("job") or cv.get("job_role") or "N/A"
         image_url = cv.get("cv") or cv.get("cv_url") or cv.get("cvUrl") or ""
 
+        
         pdf.add_page()
 
         if image_url:
@@ -77,6 +78,7 @@ async def generate_pdf(cv_list: List[dict]) -> bytes:
                     temp_path = tempfile.mktemp(suffix=".jpg")
                     with open(temp_path, "wb") as f:
                         f.write(img_data)
+                    
                     pdf.image(temp_path, x=10, y=20, w=190)
                     os.unlink(temp_path)
                 except Exception as e:
@@ -90,6 +92,7 @@ async def generate_pdf(cv_list: List[dict]) -> bytes:
             pdf.set_font("Helvetica", size=12)
             pdf.cell(190, 10, "No CV Image URL found", ln=True, align='C')
 
+        # පිටුවේ පතුලේ CV නම සහ රැකියාව
         pdf.set_y(270)
         pdf.set_font("Helvetica", "B", size=14)
         pdf.cell(190, 10, name, ln=True, align='C')
@@ -98,7 +101,6 @@ async def generate_pdf(cv_list: List[dict]) -> bytes:
         pdf.set_font("Helvetica", size=8)
         pdf.cell(190, 6, f"Page {idx + 1} of {len(cv_list)}", ln=True, align='C')
 
-    # 🔥 මෙය නිවැරදි කර ඇත
     return bytes(pdf.output(dest='S'))
 
 @app.post("/send-cvs", response_model=CVResponse)
