@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import httpx
-from playwright.async_api import async_playwright
+from pyppeteer import launch
 
 app = FastAPI()
 
@@ -36,7 +36,7 @@ class CVResponse(BaseModel):
 async def fetch_cvs_from_supabase(cv_ids: List[int]) -> List[dict]:
     ids_param = ",".join(str(id) for id in cv_ids)
     url = f"{SUPABASE_URL}/rest/v1/talents?id=in.({ids_param})&select=*"
-    
+
     async with httpx.AsyncClient() as client:
         response = await client.get(
             url,
@@ -48,17 +48,16 @@ async def fetch_cvs_from_supabase(cv_ids: List[int]) -> List[dict]:
         response.raise_for_status()
         return response.json()
 
-# ============ PDF GENERATOR ============
 async def generate_pdf(cv_list: List[dict]) -> bytes:
     pages_html = ""
-    
+
     for idx, cv in enumerate(cv_list):
         image_url = cv.get("cv") or cv.get("cv_url") or cv.get("cvUrl") or ""
         name = cv.get("name") or cv.get("candidate_name") or "Unnamed Candidate"
         job = cv.get("job") or cv.get("job_role") or "N/A"
-        
+
         img_tag = f'<img src="{image_url}" style="max-width:100%; max-height:100%; object-fit:contain;" />' if image_url else '<div style="color:#999; font-size:20px; padding:40px;">No CV Image</div>'
-        
+
         pages_html += f"""
         <div style="page-break-after:always; width:100%; height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:white; padding:20px;">
             <div style="flex:1; display:flex; justify-content:center; align-items:center; width:100%; height:90%;">
@@ -71,7 +70,7 @@ async def generate_pdf(cv_list: List[dict]) -> bytes:
             </div>
         </div>
         """
-    
+
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -89,46 +88,45 @@ async def generate_pdf(cv_list: List[dict]) -> bytes:
     </body>
     </html>
     """
-    
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
-        page = await browser.new_page()
-        await page.set_content(html_content, wait_until="networkidle")
-        pdf_bytes = await page.pdf(
-            format="A4",
-            print_background=True,
-            margin={"top": "5mm", "right": "5mm", "bottom": "5mm", "left": "5mm"}
-        )
-        await browser.close()
-        return pdf_bytes
+
+    browser = await launch(headless=True, args=['--no-sandbox'])
+    page = await browser.newPage()
+    await page.setContent(html_content, waitUntil='networkidle0')
+    pdf_bytes = await page.pdf(
+        format='A4',
+        printBackground=True,
+        margin={'top': '5mm', 'right': '5mm', 'bottom': '5mm', 'left': '5mm'}
+    )
+    await browser.close()
+    return pdf_bytes
 
 @app.post("/send-cvs", response_model=CVResponse)
 async def send_cvs(request: CVRequest):
     try:
         print(f"Received request for: {request.phoneNumber}")
         print(f"CV IDs: {request.cvIds}")
-        
+
         if not request.cvIds or len(request.cvIds) == 0:
             raise HTTPException(status_code=400, detail="Please select at least one CV")
-        
+
         selected_cvs = await fetch_cvs_from_supabase(request.cvIds)
-        
+
         if len(selected_cvs) == 0:
             raise HTTPException(status_code=404, detail="No valid CVs found in database")
-        
+
         print(f"Generating PDF with {len(selected_cvs)} CV images...")
-        
+
         pdf_bytes = await generate_pdf(selected_cvs)
-        
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
             tmp_file.write(pdf_bytes)
             temp_path = tmp_file.name
-        
+
         file_url = f"{PUBLIC_URL}/serve-pdf"
-        
+
         print(f"File URL: {file_url}")
         print("Sending PDF to OpenWA...")
-        
+
         async with httpx.AsyncClient(timeout=300.0) as client:
             payload = {
                 "chatId": f"{request.phoneNumber}@c.us",
@@ -136,7 +134,7 @@ async def send_cvs(request: CVRequest):
                 "filename": "Selected CVs.pdf",
                 "caption": f"Selected CVs ({len(selected_cvs)})"
             }
-            
+
             response = await client.post(
                 f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-document",
                 json=payload,
@@ -146,16 +144,16 @@ async def send_cvs(request: CVRequest):
                 }
             )
             response.raise_for_status()
-        
+
         print(f"OpenWA Response Status: {response.status_code}")
-        
+
         os.unlink(temp_path)
-        
+
         return CVResponse(
             success=True,
             message=f"{len(selected_cvs)} CV(s) sent successfully!"
         )
-        
+
     except httpx.HTTPStatusError as e:
         print(f"OpenWA Error: {e.response.text}")
         raise HTTPException(status_code=500, detail=f"OpenWA API error: {e.response.text}")
