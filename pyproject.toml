@@ -1,18 +1,19 @@
-[project]
-name = "cv-backend"
-version = "1.0.0"
-description = "CV Sender Backend with Pyppeteer PDF Generator"
-requires-python = ">=3.12,<3.13"
-dependencies = [
-    "fastapi[standard]==0.141.1",
-    "uvicorn[standard]==0.52.1",
-    "python-multipart==0.0.32",
-    "httpx==0.28.1",
-    "pyppeteer==0.0.25",
-    "pydantic==2.13.4",
-    "python-dotenv==1.2.2"
-]
-
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "cv-backend"
+version = "1.0.0"
+description = "CV Sender Backend"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.34.0",
+    "python-multipart==0.0.20",
+    "httpx==0.28.1",
+    "reportlab==4.2.5",
+    "Pillow==10.4.0",
+    "pydantic==2.10.4",
+    "python-dotenv==1.0.1"
+]

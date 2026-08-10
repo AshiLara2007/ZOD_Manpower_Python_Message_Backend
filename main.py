@@ -7,7 +7,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import httpx
-from fpdf import FPDF
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.utils import ImageReader
+from reportlab.lib.units import mm
 from PIL import Image
 
 app = FastAPI()
@@ -61,47 +64,66 @@ async def download_image(url: str) -> bytes:
         print(f"Failed to download image: {url}, error: {e}")
         return None
 
-def generate_pdf_fpdf2(cv_list: List[dict]) -> bytes:
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
+def generate_pdf_reportlab(cv_list: List[dict]) -> bytes:
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
 
     for idx, cv in enumerate(cv_list):
         name = cv.get("name") or cv.get("candidate_name") or "Unnamed Candidate"
         job = cv.get("job") or cv.get("job_role") or "N/A"
         image_url = cv.get("cv") or cv.get("cv_url") or cv.get("cvUrl") or ""
 
-        pdf.add_page()
+        if idx > 0:
+            pdf.showPage()
+            pdf.setPageSize(A4)
 
         if image_url:
             img_data = download_image(image_url)
             if img_data:
                 try:
-                    temp_image_path = tempfile.mktemp(suffix=".jpg")
                     img = Image.open(io.BytesIO(img_data))
+                    img_width, img_height = img.size
+                    aspect = img_width / img_height
+
+                    margin = 20 * mm
+                    max_width = width - (2 * margin)
+                    max_height = height - (2 * margin) - 40 * mm
+
+                    if aspect > (max_width / max_height):
+                        final_width = max_width
+                        final_height = max_width / aspect
+                    else:
+                        final_height = max_height
+                        final_width = max_height * aspect
+
+                    x_offset = (width - final_width) / 2
+                    y_offset = (height - final_height) / 2
+
+                    temp_image_path = tempfile.mktemp(suffix=".jpg")
                     img.convert("RGB").save(temp_image_path, "JPEG")
-                    
-                    pdf.image(temp_image_path, x=10, y=20, w=190)
+
+                    pdf.drawImage(temp_image_path, x_offset, y_offset, width=final_width, height=final_height)
                     os.unlink(temp_image_path)
+
                 except Exception as e:
                     print(f"Error processing image {image_url}: {e}")
-                    pdf.set_font("Helvetica", size=12)
-                    pdf.cell(190, 10, "CV Image unavailable", ln=True, align='C')
+                    pdf.drawString(50, height/2, "CV Image unavailable")
             else:
-                pdf.set_font("Helvetica", size=12)
-                pdf.cell(190, 10, "CV Image unavailable", ln=True, align='C')
+                pdf.drawString(50, height/2, "CV Image unavailable")
         else:
-            pdf.set_font("Helvetica", size=12)
-            pdf.cell(190, 10, "No CV Image URL found", ln=True, align='C')
+            pdf.drawString(50, height/2, "No CV Image URL found")
 
-        pdf.set_y(270)
-        pdf.set_font("Helvetica", "B", size=14)
-        pdf.cell(190, 10, name, ln=True, align='C')
-        pdf.set_font("Helvetica", size=12)
-        pdf.cell(190, 8, job, ln=True, align='C')
-        pdf.set_font("Helvetica", size=8)
-        pdf.cell(190, 6, f"Page {idx + 1} of {len(cv_list)}", ln=True, align='C')
+        pdf.setFont("Helvetica", 12)
+        pdf.drawCentredString(width / 2, 25 * mm, name)
+        pdf.setFont("Helvetica", 10)
+        pdf.drawCentredString(width / 2, 20 * mm, job)
+        pdf.setFont("Helvetica", 8)
+        pdf.drawCentredString(width / 2, 10 * mm, f"Page {idx + 1} of {len(cv_list)}")
 
-    return pdf.output(dest='S').encode('latin1')
+    pdf.save()
+    buffer.seek(0)
+    return buffer.read()
 
 @app.post("/send-cvs", response_model=CVResponse)
 async def send_cvs(request: CVRequest):
@@ -119,7 +141,7 @@ async def send_cvs(request: CVRequest):
 
         print(f"Generating PDF with {len(selected_cvs)} CV images...")
 
-        pdf_bytes = generate_pdf_fpdf2(selected_cvs)
+        pdf_bytes = generate_pdf_reportlab(selected_cvs)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
             tmp_file.write(pdf_bytes)
