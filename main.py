@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import httpx
-from pyppeteer import launch
+from weasyprint import HTML
 
 app = FastAPI()
 
@@ -21,7 +21,7 @@ app.add_middleware(
 OPENWA_URL = os.getenv("OPENWA_URL", "http://localhost:2785")
 SESSION_ID = os.getenv("SESSION_ID", "319f57c3-fb2f-48ee-bb92-bcdfef491fe8")
 API_KEY = os.getenv("API_KEY", "owa_k1_f272efc10df6fc3e786a149044169a0809631b9f06342b10e8adcce902b1c109")
-PUBLIC_URL = os.getenv("PUBLIC_URL", "https://your-app.fastapicloud.dev")
+PUBLIC_URL = os.getenv("PUBLIC_URL", "https://zod-cv-backend-python.fastapicloud.dev")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ksyxmoqzcghszrhlpaxh.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_U289_qf4pkGHp-G1C4kX5w_2bztcmOg")
 
@@ -48,7 +48,16 @@ async def fetch_cvs_from_supabase(cv_ids: List[int]) -> List[dict]:
         response.raise_for_status()
         return response.json()
 
-async def generate_pdf(cv_list: List[dict]) -> bytes:
+def generate_pdf_from_html(html_content: str) -> bytes:
+    """Generate PDF from HTML using WeasyPrint (no browser needed)"""
+    try:
+        pdf_bytes = HTML(string=html_content).write_pdf()
+        return pdf_bytes
+    except Exception as e:
+        print(f"PDF generation error: {str(e)}")
+        raise
+
+def build_html(cv_list: List[dict]) -> str:
     pages_html = ""
 
     for idx, cv in enumerate(cv_list):
@@ -56,11 +65,11 @@ async def generate_pdf(cv_list: List[dict]) -> bytes:
         name = cv.get("name") or cv.get("candidate_name") or "Unnamed Candidate"
         job = cv.get("job") or cv.get("job_role") or "N/A"
 
-        img_tag = f'<img src="{image_url}" style="max-width:100%; max-height:100%; object-fit:contain;" />' if image_url else '<div style="color:#999; font-size:20px; padding:40px;">No CV Image</div>'
+        img_tag = f'<img src="{image_url}" style="max-width:100%; max-height:80vh; object-fit:contain;" />' if image_url else '<div style="color:#999; font-size:20px; padding:40px;">No CV Image</div>'
 
         pages_html += f"""
-        <div style="page-break-after:always; width:100%; height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:white; padding:20px;">
-            <div style="flex:1; display:flex; justify-content:center; align-items:center; width:100%; height:90%;">
+        <div style="page-break-after:always; width:100%; min-height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; background:white; padding:20px;">
+            <div style="flex:1; display:flex; justify-content:center; align-items:center; width:100%;">
                 {img_tag}
             </div>
             <div style="text-align:center; font-family:Arial; margin-top:10px; padding:10px; border-top:1px solid #eee; width:100%;">
@@ -71,7 +80,7 @@ async def generate_pdf(cv_list: List[dict]) -> bytes:
         </div>
         """
 
-    html_content = f"""
+    return f"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -80,7 +89,7 @@ async def generate_pdf(cv_list: List[dict]) -> bytes:
         <style>
             * {{ margin:0; padding:0; box-sizing:border-box; }}
             body {{ background:white; }}
-            img {{ display:block; max-width:100%; max-height:90vh; object-fit:contain; }}
+            img {{ display:block; max-width:100%; max-height:80vh; object-fit:contain; margin:0 auto; }}
         </style>
     </head>
     <body>
@@ -88,17 +97,6 @@ async def generate_pdf(cv_list: List[dict]) -> bytes:
     </body>
     </html>
     """
-
-    browser = await launch(headless=True, args=['--no-sandbox'])
-    page = await browser.newPage()
-    await page.setContent(html_content, waitUntil='networkidle0')
-    pdf_bytes = await page.pdf(
-        format='A4',
-        printBackground=True,
-        margin={'top': '5mm', 'right': '5mm', 'bottom': '5mm', 'left': '5mm'}
-    )
-    await browser.close()
-    return pdf_bytes
 
 @app.post("/send-cvs", response_model=CVResponse)
 async def send_cvs(request: CVRequest):
@@ -116,7 +114,8 @@ async def send_cvs(request: CVRequest):
 
         print(f"Generating PDF with {len(selected_cvs)} CV images...")
 
-        pdf_bytes = await generate_pdf(selected_cvs)
+        html_content = build_html(selected_cvs)
+        pdf_bytes = generate_pdf_from_html(html_content)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
             tmp_file.write(pdf_bytes)
