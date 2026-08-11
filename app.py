@@ -9,8 +9,6 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 import httpx
 import json
-from PIL import Image
-import io
 
 app = FastAPI()
 
@@ -54,98 +52,13 @@ async def fetch_cvs_from_supabase(cv_ids: List[int]) -> List[dict]:
         response.raise_for_status()
         return response.json()
 
-async def download_image_data(url: str) -> bytes:
-    if not url:
-        return None
+async def send_image_to_whatsapp(phone_number: str, image_url: str, index: int, total: int):
+    """Send CV image only - no text, no caption"""
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            return response.content
-    except Exception as e:
-        print(f"Failed to download image: {url}, error: {e}")
-        return None
-
-def create_collage(image_data_list: List[bytes], names: List[str]) -> bytes:
-    """Create a vertical collage of CV images with names below each image"""
-    if not image_data_list:
-        return None
-    
-    images = []
-    for img_data in image_data_list:
-        try:
-            img = Image.open(io.BytesIO(img_data))
-            # Resize to a common width (600px) to make collage look uniform
-            img.thumbnail((600, 800))
-            images.append(img)
-        except Exception as e:
-            print(f"Error processing image for collage: {e}")
-            continue
-    
-    if not images:
-        return None
-    
-    # Calculate collage dimensions
-    total_height = sum(img.height for img in images) + (20 * len(images)) + 20
-    max_width = max(img.width for img in images) + 40
-    
-    collage = Image.new('RGB', (max_width, total_height), color=(255, 255, 255))
-    
-    y_offset = 10
-    for idx, img in enumerate(images):
-        x_offset = (max_width - img.width) // 2
-        collage.paste(img, (x_offset, y_offset))
-        y_offset += img.height + 20
-    
-    # Save to bytes
-    buffer = io.BytesIO()
-    collage.save(buffer, format='JPEG', quality=85)
-    return buffer.getvalue()
-
-async def send_collage_to_whatsapp(phone_number: str, collage_data: bytes, count: int):
-    """Send the collage image as a single image message"""
-    try:
-        # Save collage as temp file
-        temp_path = tempfile.mktemp(suffix=".jpg")
-        with open(temp_path, "wb") as f:
-            f.write(collage_data)
-        
-        # Option 1: Send as image URL (if we can serve it)
-        # For simplicity, we'll use the image URL directly from the server
-        # But we need to serve it via /serve-image endpoint.
-        # For now, we'll just use base64 (but OpenWA may not support it).
-        # Instead, we'll use the /serve-image endpoint.
-        
-        # Better approach: Serve the image via our own endpoint
-        # We'll save the image and serve it via /serve-image
-        # But we need to handle it differently.
-        # For simplicity, we'll send as document (which supports base64)
-        
-        # Actually, we'll just send as a file URL using the server.
-        # We'll save the collage and serve it via the /serve-image endpoint.
-        # For now, use the /serve-image endpoint.
-        
-        # For this to work, we need to add a /serve-image endpoint.
-        # We'll pass the file path and let it be served.
-        # Let's use the existing /serve-image endpoint.
-        
-        # Since we have the file saved, we can use the /serve-image endpoint.
-        # But we need to know the public URL for it.
-        # We'll use the PUBLIC_URL + "/serve-image"
-        
-        # Let's save the file with a unique name
-        filename = f"collage_{uuid.uuid4()}.jpg"
-        file_path = os.path.join(tempfile.gettempdir(), filename)
-        with open(file_path, "wb") as f:
-            f.write(collage_data)
-        
-        # Serve via /serve-image endpoint
-        file_url = f"{PUBLIC_URL}/serve-image/{filename}"
-        
+        # Try send-image with URL only
         payload = {
             "chatId": f"{phone_number}@c.us",
-            "url": file_url,
-            "caption": f"Selected CVs ({count})"
+            "url": image_url
         }
         
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -157,24 +70,38 @@ async def send_collage_to_whatsapp(phone_number: str, collage_data: bytes, count
                     "X-API-Key": API_KEY
                 }
             )
+            
             if response.status_code == 200 or response.status_code == 201:
-                print(f"✅ Collage sent successfully")
+                print(f"✅ Image {index}/{total} sent")
                 return True
             else:
-                print(f"❌ Collage failed: {response.status_code} - {response.text}")
-                return False
+                print(f"❌ Image {index} failed: {response.status_code}")
+                
+                # Try send-document as fallback
+                doc_payload = {
+                    "chatId": f"{phone_number}@c.us",
+                    "url": image_url,
+                    "filename": f"CV_{index}.jpg"
+                }
+                doc_response = await client.post(
+                    f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-document",
+                    json=doc_payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-API-Key": API_KEY
+                    }
+                )
+                
+                if doc_response.status_code == 200 or doc_response.status_code == 201:
+                    print(f"✅ Image {index}/{total} sent via document")
+                    return True
+                else:
+                    print(f"❌ Document fallback failed: {doc_response.text}")
+                    return False
                 
     except Exception as e:
-        print(f"❌ Error sending collage: {e}")
+        print(f"❌ Error sending image {index}: {e}")
         return False
-
-@app.get("/serve-image/{filename}")
-async def serve_image(filename: str):
-    """Serve a temporary image file"""
-    file_path = os.path.join(tempfile.gettempdir(), filename)
-    if os.path.exists(file_path):
-        return FileResponse(file_path, media_type="image/jpeg")
-    raise HTTPException(status_code=404, detail="Image not found")
 
 async def process_cv_send(cv_ids: List[int], phoneNumber: str, task_id: str):
     try:
@@ -188,40 +115,30 @@ async def process_cv_send(cv_ids: List[int], phoneNumber: str, task_id: str):
         total = len(selected_cvs)
         progress_tasks[task_id] = {"progress": 20, "status": f"Found {total} CVs"}
 
-        # Download all images
-        progress_tasks[task_id] = {"progress": 30, "status": "Downloading images..."}
-        image_data_list = []
-        names = []
-        for cv in selected_cvs:
+        success_count = 0
+        for idx, cv in enumerate(selected_cvs):
             image_url = cv.get("cv") or cv.get("cv_url") or cv.get("cvUrl") or ""
-            if image_url:
-                img_data = await download_image_data(image_url)
-                if img_data:
-                    image_data_list.append(img_data)
-                    name = cv.get("name") or cv.get("candidate_name") or "Unnamed"
-                    names.append(name)
-        
-        if not image_data_list:
-            progress_tasks[task_id] = {"progress": 100, "status": "No images found", "error": True}
-            return
 
-        progress_tasks[task_id] = {"progress": 50, "status": "Creating collage..."}
-        
-        # Create collage
-        collage_data = create_collage(image_data_list, names)
-        if not collage_data:
-            progress_tasks[task_id] = {"progress": 100, "status": "Failed to create collage", "error": True}
-            return
+            if not image_url:
+                print(f"⚠️ No image URL for CV {idx+1}")
+                continue
 
-        progress_tasks[task_id] = {"progress": 70, "status": f"Sending collage with {len(image_data_list)} CVs..."}
-        
-        # Send collage as single image
-        success = await send_collage_to_whatsapp(phoneNumber, collage_data, len(image_data_list))
-        
-        if success:
-            progress_tasks[task_id] = {"progress": 100, "status": f"✅ All {len(image_data_list)} CVs sent in one collage!", "success": True}
+            current_progress = 20 + ((idx + 1) / total) * 75
+            progress_tasks[task_id] = {
+                "progress": int(current_progress), 
+                "status": f"Sending CV {idx+1}/{total}"
+            }
+
+            success = await send_image_to_whatsapp(phoneNumber, image_url, idx+1, total)
+            if success:
+                success_count += 1
+            
+            await asyncio.sleep(0.5)
+
+        if success_count == total:
+            progress_tasks[task_id] = {"progress": 100, "status": f"✅ All {total} CVs sent!", "success": True}
         else:
-            progress_tasks[task_id] = {"progress": 100, "status": "❌ Failed to send collage", "error": True}
+            progress_tasks[task_id] = {"progress": 100, "status": f"⚠️ {success_count}/{total} CVs sent.", "success": True}
 
     except Exception as e:
         progress_tasks[task_id] = {"progress": 100, "status": f"❌ Error: {str(e)}", "error": True}
@@ -238,7 +155,7 @@ async def send_cvs(request: CVRequest):
 
         return CVResponse(
             success=True,
-            message="Process started. Creating collage...",
+            message="Sending CVs...",
             task_id=task_id
         )
 
