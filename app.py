@@ -52,10 +52,45 @@ async def fetch_cvs_from_supabase(cv_ids: List[int]) -> List[dict]:
         response.raise_for_status()
         return response.json()
 
-async def send_image_to_whatsapp(phone_number: str, image_url: str, index: int, total: int):
-    """Send CV image only - no text, no caption"""
+async def send_text_message(phone_number: str) -> bool:
+    """Send welcome text message first"""
     try:
-        # Try send-image with URL only
+        # Build the text message with proper formatting
+        # Using \n for line breaks in WhatsApp
+        text_message = """Welcome To ZOD Manpower,
+Your Selected CVs
+
+Lara Williams"""
+
+        payload = {
+            "chatId": f"{phone_number}@c.us",
+            "text": text_message
+        }
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-text",
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-API-Key": API_KEY
+                }
+            )
+            
+            if response.status_code == 200 or response.status_code == 201:
+                print("✅ Welcome text message sent")
+                return True
+            else:
+                print(f"❌ Text message failed: {response.text}")
+                return False
+                
+    except Exception as e:
+        print(f"❌ Error sending text: {e}")
+        return False
+
+async def send_image_to_whatsapp(phone_number: str, image_url: str, index: int, total: int):
+    """Send CV image only - no caption"""
+    try:
         payload = {
             "chatId": f"{phone_number}@c.us",
             "url": image_url
@@ -72,11 +107,9 @@ async def send_image_to_whatsapp(phone_number: str, image_url: str, index: int, 
             )
             
             if response.status_code == 200 or response.status_code == 201:
-                print(f"✅ Image {index}/{total} sent")
+                print(f"✅ CV {index}/{total} sent")
                 return True
             else:
-                print(f"❌ Image {index} failed: {response.status_code}")
-                
                 # Try send-document as fallback
                 doc_payload = {
                     "chatId": f"{phone_number}@c.us",
@@ -93,14 +126,14 @@ async def send_image_to_whatsapp(phone_number: str, image_url: str, index: int, 
                 )
                 
                 if doc_response.status_code == 200 or doc_response.status_code == 201:
-                    print(f"✅ Image {index}/{total} sent via document")
+                    print(f"✅ CV {index}/{total} sent via document")
                     return True
                 else:
-                    print(f"❌ Document fallback failed: {doc_response.text}")
+                    print(f"❌ CV {index} failed: {doc_response.text}")
                     return False
                 
     except Exception as e:
-        print(f"❌ Error sending image {index}: {e}")
+        print(f"❌ Error sending CV {index}: {e}")
         return False
 
 async def process_cv_send(cv_ids: List[int], phoneNumber: str, task_id: str):
@@ -113,8 +146,18 @@ async def process_cv_send(cv_ids: List[int], phoneNumber: str, task_id: str):
             return
 
         total = len(selected_cvs)
-        progress_tasks[task_id] = {"progress": 20, "status": f"Found {total} CVs"}
+        progress_tasks[task_id] = {"progress": 15, "status": f"Found {total} CVs"}
 
+        # 🔥 Step 1: Send Welcome Text Message First
+        progress_tasks[task_id] = {"progress": 20, "status": "Sending welcome message..."}
+        text_sent = await send_text_message(phoneNumber)
+        
+        if not text_sent:
+            progress_tasks[task_id] = {"progress": 25, "status": "Warning: Text message failed, continuing with images..."}
+        else:
+            progress_tasks[task_id] = {"progress": 25, "status": "Welcome message sent!"}
+
+        # Step 2: Send all CV images
         success_count = 0
         for idx, cv in enumerate(selected_cvs):
             image_url = cv.get("cv") or cv.get("cv_url") or cv.get("cvUrl") or ""
@@ -123,7 +166,7 @@ async def process_cv_send(cv_ids: List[int], phoneNumber: str, task_id: str):
                 print(f"⚠️ No image URL for CV {idx+1}")
                 continue
 
-            current_progress = 20 + ((idx + 1) / total) * 75
+            current_progress = 25 + ((idx + 1) / total) * 70
             progress_tasks[task_id] = {
                 "progress": int(current_progress), 
                 "status": f"Sending CV {idx+1}/{total}"
@@ -135,6 +178,7 @@ async def process_cv_send(cv_ids: List[int], phoneNumber: str, task_id: str):
             
             await asyncio.sleep(0.5)
 
+        # Step 3: Complete
         if success_count == total:
             progress_tasks[task_id] = {"progress": 100, "status": f"✅ All {total} CVs sent!", "success": True}
         else:
