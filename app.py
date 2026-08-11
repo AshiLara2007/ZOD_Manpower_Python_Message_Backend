@@ -58,9 +58,7 @@ async def send_text_message(phone_number: str) -> bool:
         # Build the text message with proper formatting
         # Using \n for line breaks in WhatsApp
         text_message = """Welcome To ZOD Manpower,
-Your Selected CVs
-
-Lara Williams"""
+Your Selected CVs"""
 
         payload = {
             "chatId": f"{phone_number}@c.us",
