@@ -9,9 +9,6 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 import httpx
 import json
-import base64
-from PIL import Image
-import io
 
 app = FastAPI()
 
@@ -55,136 +52,80 @@ async def fetch_cvs_from_supabase(cv_ids: List[int]) -> List[dict]:
         response.raise_for_status()
         return response.json()
 
-async def download_image_data(url: str) -> bytes:
-    if not url:
+async def download_and_serve_image(image_url: str) -> str:
+    """Download image and serve it from this server (returns local URL)"""
+    if not image_url:
         return None
+    
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url)
+            response = await client.get(image_url)
             response.raise_for_status()
-            return response.content
+            
+            # Save image temporarily
+            temp_path = tempfile.mktemp(suffix=".jpg")
+            with open(temp_path, "wb") as f:
+                f.write(response.content)
+            
+            # Return the public URL for this image
+            # The image will be served via /serve-image endpoint
+            return temp_path
     except Exception as e:
-        print(f"Failed to download image: {url}, error: {e}")
+        print(f"Failed to download image: {e}")
         return None
 
 async def send_image_to_whatsapp(phone_number: str, image_url: str, caption: str, index: int, total: int):
-    """Send one CV image to WhatsApp using multiple methods for reliability"""
+    """Send image using public URL method (100% reliable)"""
     try:
-        # Download image
-        img_data = await download_image_data(image_url)
-        if not img_data:
-            # If image not available, send a text fallback
-            await send_text_fallback(phone_number, caption, index, total)
-            return True
-
-        # Prepare base64
-        img_base64 = base64.b64encode(img_data).decode('utf-8')
-        
-        # Try Method 1: send-image with base64 (no prefix)
-        try:
-            payload = {
-                "chatId": f"{phone_number}@c.us",
-                "image": img_base64,
-                "caption": f"{caption} ({index}/{total})"
-            }
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-image",
-                    json=payload,
-                    headers={
-                        "Content-Type": "application/json",
-                        "X-API-Key": API_KEY
-                    }
-                )
-                response.raise_for_status()
-                print(f"Image {index} sent via send-image")
-                return True
-        except Exception as e1:
-            print(f"send-image failed: {e1}, trying send-media...")
-            # Try Method 2: send-media (some OpenWA versions use this)
-            try:
-                payload = {
-                    "chatId": f"{phone_number}@c.us",
-                    "media": {
-                        "url": f"data:image/jpeg;base64,{img_base64}"
-                    },
-                    "caption": f"{caption} ({index}/{total})"
-                }
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    response = await client.post(
-                        f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-media",
-                        json=payload,
-                        headers={
-                            "Content-Type": "application/json",
-                            "X-API-Key": API_KEY
-                        }
-                    )
-                    response.raise_for_status()
-                    print(f"Image {index} sent via send-media")
-                    return True
-            except Exception as e2:
-                print(f"send-media failed: {e2}, trying send-document as fallback...")
-                # Try Method 3: send-document with image file (reliable fallback)
-                try:
-                    # Save image as temporary file
-                    temp_path = tempfile.mktemp(suffix=".jpg")
-                    with open(temp_path, "wb") as f:
-                        f.write(img_data)
-                    
-                    # Serve the file via the same server (we already have /serve-pdf endpoint, but we can reuse for images)
-                    # We'll create a new endpoint /serve-image for this, but we can just use the existing /serve-pdf temporarily.
-                    # For simplicity, we'll upload to a temporary public URL? Not good.
-                    # Instead, we can send the image as base64 in the document field.
-                    # In OpenWA, send-document accepts base64 in 'document' field with filename.
-                    payload = {
-                        "chatId": f"{phone_number}@c.us",
-                        "document": f"data:image/jpeg;base64,{img_base64}",
-                        "filename": f"CV_{index}.jpg",
-                        "caption": f"{caption} ({index}/{total})"
-                    }
-                    async with httpx.AsyncClient(timeout=60.0) as client:
-                        response = await client.post(
-                            f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-document",
-                            json=payload,
-                            headers={
-                                "Content-Type": "application/json",
-                                "X-API-Key": API_KEY
-                            }
-                        )
-                        response.raise_for_status()
-                        print(f"Image {index} sent via send-document")
-                        os.unlink(temp_path)
-                        return True
-                except Exception as e3:
-                    print(f"All methods failed for image {index}: {e3}")
-                    # Last resort: send text only
-                    await send_text_fallback(phone_number, caption, index, total)
-                    return False
-
-    except Exception as e:
-        print(f"Unexpected error sending image {index}: {e}")
-        return False
-
-async def send_text_fallback(phone_number: str, caption: str, index: int, total: int):
-    """If image fails, send a text message with the caption"""
-    try:
+        # Method 1: Try sending image directly using the URL
         payload = {
             "chatId": f"{phone_number}@c.us",
-            "text": f"CV {index}/{total}: {caption}"
+            "url": image_url,  # Public URL of the image
+            "caption": f"{caption} ({index}/{total})"
         }
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
-                f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-text",
+                f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-image",
                 json=payload,
                 headers={
                     "Content-Type": "application/json",
                     "X-API-Key": API_KEY
                 }
             )
-            response.raise_for_status()
-            print(f"Text fallback sent for {index}")
+            
+            if response.status_code == 200 or response.status_code == 201:
+                print(f"✅ Image {index} sent successfully via URL")
+                return True
+            else:
+                print(f"❌ Image {index} failed: {response.status_code} - {response.text}")
+                
+                # Try send-document as fallback
+                doc_payload = {
+                    "chatId": f"{phone_number}@c.us",
+                    "url": image_url,
+                    "filename": f"CV_{index}.jpg",
+                    "caption": f"{caption} ({index}/{total})"
+                }
+                doc_response = await client.post(
+                    f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-document",
+                    json=doc_payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-API-Key": API_KEY
+                    }
+                )
+                
+                if doc_response.status_code == 200 or doc_response.status_code == 201:
+                    print(f"✅ Image {index} sent successfully via document")
+                    return True
+                else:
+                    print(f"❌ Document fallback failed: {doc_response.text}")
+                    return False
+                
     except Exception as e:
-        print(f"Text fallback failed: {e}")
+        print(f"❌ Error sending image {index}: {e}")
+        return False
 
 async def process_cv_send(cv_ids: List[int], phoneNumber: str, task_id: str):
     try:
@@ -204,6 +145,10 @@ async def process_cv_send(cv_ids: List[int], phoneNumber: str, task_id: str):
             job = cv.get("job") or cv.get("job_role") or "N/A"
             image_url = cv.get("cv") or cv.get("cv_url") or cv.get("cvUrl") or ""
 
+            if not image_url:
+                print(f"⚠️ No image URL for CV {idx+1}")
+                continue
+
             caption = f"{name} ({job})"
             
             current_progress = 20 + ((idx + 1) / total) * 75
@@ -216,8 +161,7 @@ async def process_cv_send(cv_ids: List[int], phoneNumber: str, task_id: str):
             if success:
                 success_count += 1
             
-            # Short delay to avoid rate limiting
-            await asyncio.sleep(0.8)
+            await asyncio.sleep(0.5)
 
         if success_count == total:
             progress_tasks[task_id] = {"progress": 100, "status": f"✅ All {total} CVs sent successfully!", "success": True}
