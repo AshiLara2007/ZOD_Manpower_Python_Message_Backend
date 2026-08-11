@@ -68,51 +68,113 @@ async def download_image_data(url: str) -> bytes:
         return None
 
 async def send_image_to_whatsapp(phone_number: str, image_url: str, caption: str, index: int, total: int):
-    """එක් CV ඡායාරූපයක් WhatsApp එකට යවයි"""
+    """Send one CV image to WhatsApp using multiple methods for reliability"""
     try:
-        # Option 1: Direct URL (OpenWA supports this)
-        # මෙය පහසුයි, නමුත් සමහර URLs වැඩ නොකරයි.
-        payload = {
-            "chatId": f"{phone_number}@c.us",
-            "image": image_url,  # Direct URL
-            "caption": caption
-        }
-        
-        # Option 2: Base64 (100% reliable, but slightly slower)
-        # අපි Base64 භාවිතා කරමු (Reliable)
+        # Download image
         img_data = await download_image_data(image_url)
-        if img_data:
-            # Resize to reduce size (optional but good for speed)
-            try:
-                img = Image.open(io.BytesIO(img_data))
-                # Max size 1024x1024 to keep it fast
-                img.thumbnail((1024, 1024))
-                buffered = io.BytesIO()
-                img.save(buffered, format="JPEG", quality=80)
-                img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
-                payload = {
-                    "chatId": f"{phone_number}@c.us",
-                    "image": f"data:image/jpeg;base64,{img_base64}",
-                    "caption": caption
-                }
-            except Exception as e:
-                print(f"Error processing image {image_url}: {e}")
-                # Fallback to original URL
-                payload = {
-                    "chatId": f"{phone_number}@c.us",
-                    "image": image_url,
-                    "caption": caption
-                }
-        else:
-            # No image data, send text fallback
+        if not img_data:
+            # If image not available, send a text fallback
+            await send_text_fallback(phone_number, caption, index, total)
+            return True
+
+        # Prepare base64
+        img_base64 = base64.b64encode(img_data).decode('utf-8')
+        
+        # Try Method 1: send-image with base64 (no prefix)
+        try:
             payload = {
                 "chatId": f"{phone_number}@c.us",
-                "text": f"CV {index}: No image available"
+                "image": img_base64,
+                "caption": f"{caption} ({index}/{total})"
             }
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-image",
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-API-Key": API_KEY
+                    }
+                )
+                response.raise_for_status()
+                print(f"Image {index} sent via send-image")
+                return True
+        except Exception as e1:
+            print(f"send-image failed: {e1}, trying send-media...")
+            # Try Method 2: send-media (some OpenWA versions use this)
+            try:
+                payload = {
+                    "chatId": f"{phone_number}@c.us",
+                    "media": {
+                        "url": f"data:image/jpeg;base64,{img_base64}"
+                    },
+                    "caption": f"{caption} ({index}/{total})"
+                }
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    response = await client.post(
+                        f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-media",
+                        json=payload,
+                        headers={
+                            "Content-Type": "application/json",
+                            "X-API-Key": API_KEY
+                        }
+                    )
+                    response.raise_for_status()
+                    print(f"Image {index} sent via send-media")
+                    return True
+            except Exception as e2:
+                print(f"send-media failed: {e2}, trying send-document as fallback...")
+                # Try Method 3: send-document with image file (reliable fallback)
+                try:
+                    # Save image as temporary file
+                    temp_path = tempfile.mktemp(suffix=".jpg")
+                    with open(temp_path, "wb") as f:
+                        f.write(img_data)
+                    
+                    # Serve the file via the same server (we already have /serve-pdf endpoint, but we can reuse for images)
+                    # We'll create a new endpoint /serve-image for this, but we can just use the existing /serve-pdf temporarily.
+                    # For simplicity, we'll upload to a temporary public URL? Not good.
+                    # Instead, we can send the image as base64 in the document field.
+                    # In OpenWA, send-document accepts base64 in 'document' field with filename.
+                    payload = {
+                        "chatId": f"{phone_number}@c.us",
+                        "document": f"data:image/jpeg;base64,{img_base64}",
+                        "filename": f"CV_{index}.jpg",
+                        "caption": f"{caption} ({index}/{total})"
+                    }
+                    async with httpx.AsyncClient(timeout=60.0) as client:
+                        response = await client.post(
+                            f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-document",
+                            json=payload,
+                            headers={
+                                "Content-Type": "application/json",
+                                "X-API-Key": API_KEY
+                            }
+                        )
+                        response.raise_for_status()
+                        print(f"Image {index} sent via send-document")
+                        os.unlink(temp_path)
+                        return True
+                except Exception as e3:
+                    print(f"All methods failed for image {index}: {e3}")
+                    # Last resort: send text only
+                    await send_text_fallback(phone_number, caption, index, total)
+                    return False
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+    except Exception as e:
+        print(f"Unexpected error sending image {index}: {e}")
+        return False
+
+async def send_text_fallback(phone_number: str, caption: str, index: int, total: int):
+    """If image fails, send a text message with the caption"""
+    try:
+        payload = {
+            "chatId": f"{phone_number}@c.us",
+            "text": f"CV {index}/{total}: {caption}"
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-image",
+                f"{OPENWA_URL}/api/sessions/{SESSION_ID}/messages/send-text",
                 json=payload,
                 headers={
                     "Content-Type": "application/json",
@@ -120,14 +182,12 @@ async def send_image_to_whatsapp(phone_number: str, image_url: str, caption: str
                 }
             )
             response.raise_for_status()
-            return True
+            print(f"Text fallback sent for {index}")
     except Exception as e:
-        print(f"Error sending image {index}: {e}")
-        return False
+        print(f"Text fallback failed: {e}")
 
 async def process_cv_send(cv_ids: List[int], phoneNumber: str, task_id: str):
     try:
-        # Step 1: Fetch CVs (0-20%)
         progress_tasks[task_id] = {"progress": 5, "status": "Fetching CVs..."}
         selected_cvs = await fetch_cvs_from_supabase(cv_ids)
         
@@ -138,7 +198,6 @@ async def process_cv_send(cv_ids: List[int], phoneNumber: str, task_id: str):
         total = len(selected_cvs)
         progress_tasks[task_id] = {"progress": 20, "status": f"Found {total} CVs"}
 
-        # Step 2: Send images one by one (20% to 95%)
         success_count = 0
         for idx, cv in enumerate(selected_cvs):
             name = cv.get("name") or cv.get("candidate_name") or "Unnamed"
@@ -147,26 +206,23 @@ async def process_cv_send(cv_ids: List[int], phoneNumber: str, task_id: str):
 
             caption = f"{name} ({job})"
             
-            # Update progress (20% to 95%)
             current_progress = 20 + ((idx + 1) / total) * 75
             progress_tasks[task_id] = {
                 "progress": int(current_progress), 
                 "status": f"Sending {idx+1}/{total}: {name}"
             }
 
-            # Send the image
             success = await send_image_to_whatsapp(phoneNumber, image_url, caption, idx+1, total)
             if success:
                 success_count += 1
             
-            # Small delay to avoid rate limiting
-            await asyncio.sleep(0.5)
+            # Short delay to avoid rate limiting
+            await asyncio.sleep(0.8)
 
-        # Step 3: Complete (100%)
         if success_count == total:
             progress_tasks[task_id] = {"progress": 100, "status": f"✅ All {total} CVs sent successfully!", "success": True}
         else:
-            progress_tasks[task_id] = {"progress": 100, "status": f"⚠️ {success_count}/{total} CVs sent. Check logs.", "success": True}
+            progress_tasks[task_id] = {"progress": 100, "status": f"⚠️ {success_count}/{total} CVs sent.", "success": True}
 
     except Exception as e:
         progress_tasks[task_id] = {"progress": 100, "status": f"❌ Error: {str(e)}", "error": True}
